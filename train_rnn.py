@@ -145,6 +145,7 @@ if __name__ == '__main__':
     for epoch in range(200):
         n = 0
         while n < X.shape[0]:
+            optimizer.zero_grad()
             end = min(X.shape[0], n + batch_size)
             x_iter = X[n:end]
             y_iter = y[n:end]
@@ -160,7 +161,7 @@ if __name__ == '__main__':
 
             y_hat = net2(y_hat[:, -1, :])
             l = loss(y_hat, y_iter)
-            optimizer.zero_grad()
+            
             l.backward()
             optimizer.step()
         if epoch % 10 == 9:

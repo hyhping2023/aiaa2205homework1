@@ -20,11 +20,9 @@ if __name__ == '__main__':
     parser.add_argument('--final', action='store_true', default=False)
     args = parser.parse_args()
 
-    feat_dir = 'mybof100/'
-    feat_dim = 100
-    list_videos = 'labels/trainval.csv'
+    list_videos = '../labels/trainval.csv'
     feat_appendix = '.csv'
-    mfcc_path = 'mfcc/'
+    mfcc_path = '../mfcc/'
 
     # 1. read all features in one array.
     fread = open(list_videos, "r")
@@ -92,11 +90,11 @@ if __name__ == '__main__':
     net2 = nn.Sequential(
         nn.Linear(32, 64),
         nn.ReLU(),
-        nn.Dropout(0.1),
+        # nn.Dropout(0.99),
         nn.Linear(64, 10),
     )
 
-    output_file = 'models/mfcc-100.conv_2.model'
+    output_file = '../models/mfcc-100.conv_2.model'
     # output_file = 'models/temp.model'
 
     def init_weights(m):
@@ -130,6 +128,7 @@ if __name__ == '__main__':
     for epoch in range(200):
         n = 0
         while n < X.shape[0]:
+            optimizer.zero_grad()
             end = min(X.shape[0], n + batch_size)
             x_iter = X[n:end]
             y_iter = y[n:end]
@@ -143,7 +142,6 @@ if __name__ == '__main__':
             # y_hat = torch.nn.functional.softmax(y_hat, dim=0)
             # print(y_hat, y_iter)
             l = loss(y_hat, y_iter)
-            optimizer.zero_grad()
             l.backward()
             optimizer.step()
         if epoch % 10 == 9:
