@@ -18,26 +18,26 @@ class ResnetBlock():
             if type(m) == nn.Linear:
                 torch.nn.init.xavier_uniform_(m.weight)
                 m.bias.data.fill_(0.01)
-    def get_conv_block(self, in_channels, out_channels, conv_layers = 5):
-        def get_conv_dict(in_channels, out_channels, num:list):
+    def get_conv_block(self, in_channels, out_channels, conv_layers = 5, index = 0):
+        def get_conv_dict(in_channels, out_channels, num:list, index):
             assert len(num) == 2
             conv_layers = OrderedDict()
             for _ in range(num[0], num[1]):
                 conv_layers.update(
                     {
-                f'conv{_}': nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3), stride=1, padding=(1, 1)),
-                f'bn{_}': nn.BatchNorm2d(out_channels),
-                f'relu{_}': nn.ReLU(),
+                f'conv{index}_{_}': nn.Conv2d(in_channels, out_channels, kernel_size=(3, 3), stride=1, padding=(1, 1)),
+                f'bn{index}_{_}': nn.BatchNorm2d(out_channels),
+                f'relu{index}_{_}': nn.ReLU(),
             }
                 )
             return conv_layers
         conv_dict = OrderedDict()
         if in_channels == out_channels:
-            conv_dict.update(get_conv_dict(in_channels, out_channels, [0,conv_layers]))
+            conv_dict.update(get_conv_dict(in_channels, out_channels, [0,conv_layers], index))
             return conv_dict
         else:
-            conv_dict.update(get_conv_dict(in_channels, out_channels, [0,1]))
-            conv_dict.update(get_conv_dict(out_channels, out_channels, [1,conv_layers]))
+            conv_dict.update(get_conv_dict(in_channels, out_channels, [0,1], index))
+            conv_dict.update(get_conv_dict(out_channels, out_channels, [1,conv_layers], index))
             return conv_dict
     def __init__(self, in_channels, out_channels, conv_layers:list, layers = 5, device = 'cuda'):
         assert layers == len(conv_layers)
@@ -46,7 +46,10 @@ class ResnetBlock():
         self.out_channels = out_channels
         blocks = OrderedDict()
         for _ in range(layers):
-            blocks.update(self.get_conv_block(in_channels, out_channels, conv_layers[_]))
+            if in_channels != out_channels and _ == 0:
+                blocks.update(self.get_conv_block(in_channels, out_channels, conv_layers[_], _))
+            else:
+                blocks.update(self.get_conv_block(out_channels, out_channels, conv_layers[_], _))
         self.net = nn.Sequential(blocks)
         self.shortcut = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1), stride=1, padding=0),
@@ -191,13 +194,14 @@ if __name__ == '__main__':
     mfcc_path = '../mfcc/'
     output_file = '../models/mfcc-100.conv_2.model'
     device = 'cuda'
-    batch_size = 256
+    batch_size = 64
 
     X, x_t, y, y_t = dataLoader(list_videos, mfcc_path, batch_size, shrink = 10000)
     CNN = loadModel(args.cont, output_file, device)
 
     loss = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(CNN(), lr=0.01, weight_decay=1e-4)
+    # print(CNN.net1.net, '\n', CNN.net2.net,'\n', CNN.net3.net,'\n', CNN.output)
     
     epoches = []
     scores = []
