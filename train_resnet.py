@@ -8,12 +8,12 @@ import os
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 from matplotlib import pyplot as plt
-import pickle
+from pandas import DataFrame as df
 import sys
 from collections import OrderedDict
 import argparse
 
-class ResnetBlock():
+class ResnetBlock(nn.Module):
     def init_weights(self, m):
             if type(m) == nn.Linear:
                 torch.nn.init.xavier_uniform_(m.weight)
@@ -40,6 +40,7 @@ class ResnetBlock():
             conv_dict.update(get_conv_dict(out_channels, out_channels, [1,conv_layers], index))
             return conv_dict
     def __init__(self, in_channels, out_channels, conv_layers:list, layers = 5, device = 'cuda'):
+        super(ResnetBlock, self).__init__()
         assert layers == len(conv_layers)
         self.layers = layers
         self.in_channels = in_channels
@@ -86,8 +87,9 @@ class ResnetBlock():
             self.shortcut.eval()
         
 
-class MyResnetCNN():
+class MyResnetCNN(nn.Module):
     def __init__(self, device='cuda'):
+        super(MyResnetCNN, self).__init__()
         self.device = device
         self.net0 = nn.Sequential(
             nn.Conv2d(1, 8, kernel_size=(7, 7), stride=2, padding=3),
@@ -95,8 +97,8 @@ class MyResnetCNN():
         ).to(device)
         self.net1 = ResnetBlock(8, 16, [2, 2, 2, 2, 2], layers=5, device = device)
         self.net2 = ResnetBlock(16, 32, [2, 2, 2, 2, 2, 2, 2], layers=7, device = device)
-        self.net3 = ResnetBlock(32, 64, [2, 2, 2, 2, 2, 2, 2, 2, 2], layers=9, device = device)
-        self.net4 = ResnetBlock(64, 128, [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], layers=11, device = device)
+        self.net3 = ResnetBlock(32, 128, [2, 2, 2, 2, 2, 2, 2, 2, 2], layers=9, device = device)
+        # self.net4 = ResnetBlock(64, 128, [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], layers=11, device = device)
         self.output = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
@@ -105,7 +107,7 @@ class MyResnetCNN():
             nn.Linear(128, 10)
         ).to(device)
         self.init_weights(self.net0)
-        self.init_weights(self.net4)
+        # self.init_weights(self.net4)
     def init_weights(self, m):
         if type(m) == nn.Linear:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -123,8 +125,8 @@ class MyResnetCNN():
         x1 = self.net1.forward(x0)
         x2 = self.net2.forward(x1)
         x3 = self.net3.forward(x2)
-        x4 = self.net4.forward(x3)
-        result = self.output(x4)
+        # x4 = self.net4.forward(x3)
+        result = self.output(x3)
         return result
     def changeMode(self, mode):
         if mode == 'train':
@@ -132,17 +134,17 @@ class MyResnetCNN():
             self.net1.changeMode('train')
             self.net2.changeMode('train')
             self.net3.changeMode('train')
-            self.net4.changeMode('train')
+            # self.net4.changeMode('train')
             self.output.train()
         elif mode == 'eval':
             self.net0.eval()
             self.net1.changeMode('eval')
             self.net2.changeMode('eval')
             self.net3.changeMode('eval')
-            self.net4.changeMode('eval')
+            # self.net4.changeMode('eval')
             self.output.eval()
     def __call__(self, *args: torch.Any, **kwds: torch.Any) -> torch.Any:
-        return (*self.net0.parameters() ,*self.net1(), *self.net2(), *self.net3(), *self.net4(), *self.output.parameters())
+        return (*self.net0.parameters() ,*self.net1(), *self.net2(), *self.net3(), *self.output.parameters())
     def predict(self, x):
         self.changeMode('eval')
         with torch.no_grad():
@@ -205,11 +207,11 @@ def dataLoader(list_videos, mfcc_path, batch_size, shrink, testmode = False, rat
 
 def loadModel(load:bool, output_file, device):
     if load:
-        with open(output_file, 'rb') as f:
-            checkpoint = pickle.load(f)
-            model = checkpoint['CNN']
-            optimizer = checkpoint['optimizer']
-            return model, optimizer
+        model = MyResnetCNN(device=device)
+        checkpoint = torch.load(output_file)
+        model = model.load_state_dict(checkpoint['CNN'])
+        optimizer = checkpoint['optimizer']
+        return model, optimizer
     else:
         model = MyResnetCNN(device=device)
         return model, torch.optim.Adam(model(), lr=0.01, weight_decay=1e-4)
@@ -224,15 +226,15 @@ if __name__ == '__main__':
     list_videos = '../labels/trainval.csv'
     feat_appendix = '.csv'
     mfcc_path = '../mfcc/'
-    output_file = '../models/mfcc-100.resnet.model'
-    device = 'cuda'
-    batch_size = 512
+    output_file = '../models/mfcc-100.resnet.newmfcc.pth'
+    device = 'cuda:1'
+    batch_size = 1024
 
     X, x_t, y, y_t = dataLoader(list_videos, mfcc_path, batch_size, shrink = 10000, testmode = args.final, ratio = 0.2)
     CNN, optimizer = loadModel(args.cont, output_file, device)
 
     loss = nn.CrossEntropyLoss()
-    print(CNN.net1.net, '\n', CNN.net2.net,'\n', CNN.net3.net,'\n',CNN.net4.net, '\n', CNN.output)
+    print(CNN.net1.net, '\n', CNN.net2.net,'\n', CNN.net3.net,'\n', CNN.output)
     
     epoches = []
     scores = []
@@ -241,8 +243,8 @@ if __name__ == '__main__':
     for epoch in range(200):
         for inx, (x_iter, y_iter) in enumerate(zip(X, y)):
             optimizer.zero_grad()
-            x_iter = x_iter.cuda()
-            y_iter = y_iter.cuda()
+            x_iter = x_iter.to(device)
+            y_iter = y_iter.to(device)
             y_hat = CNN.forward(x_iter)
             l = loss(y_hat, y_iter)
             l.backward()
@@ -256,7 +258,7 @@ if __name__ == '__main__':
             scores.append(l.item())
             test_y_hat = []
             for x_t_iter, y_t_iter in zip(x_t, y_t):
-                x_t_iter = x_t_iter.cuda()
+                x_t_iter = x_t_iter.to(device)
                 test_y_hat.append(CNN.predict(x_t_iter).cpu())
                 x_t_iter = x_t_iter.cpu()
             test_y = torch.cat(y_t, dim=0)
@@ -268,8 +270,10 @@ if __name__ == '__main__':
             losses.append(accuracy)
             print(f'epoch:{epoch + 1} Training Loss: {l.item()} Val Accuracy: {accuracy}')
 
-    with open(output_file, 'wb') as f:
-        pickle.dump({'CNN': CNN, 'optimizer': optimizer}, f)
+    # with open(output_file, 'wb') as f:
+    #     pickle.dump({'CNN': CNN, 'optimizer': optimizer}, f)
+    torch.save({'model':CNN.state_dict(), 'optimizer': optimizer}, output_file)
+
     # plot and add labels
     plt.plot(epoches, np.array(scores)/max(scores), label='loss')
     plt.plot(epoches, losses, label='accuracy')

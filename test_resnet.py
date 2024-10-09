@@ -44,29 +44,28 @@ def predict(model, x_iter):
     return y_pred
 
 def loadModel(output_file):
-    with open(output_file, 'rb') as f:
-        checkpoint = pickle.load(f)
-        model = checkpoint['CNN']
-        optimizer = checkpoint['optimizer']
-        return model, optimizer
+    model = MyResnetCNN(device='cuda')
+    checkpoint = torch.load(output_file)
+    model.load_state_dict(checkpoint['model'])
+    optimizer = checkpoint['optimizer']
+    return model, optimizer
 
 if __name__ == '__main__':
     
-    model = '../models/mfcc-100.resnet_1_final.model'
+    model = '../models/mfcc-100.resnet.pth'
     output_file = '../testresults/mfcc-100.resnet.csv'
     list_videos = '../labels/test_for_student.label'
     feat_appendix = '.csv'
     mfcc_path = '../mfcc/'
 
     # 1. read all features in one array.
-    batch_size = 1024
+    batch_size = 512
     x_loader, video_ids = dataLoader(list_videos, mfcc_path, batch_size, feat_appendix)
 
     # 2. load model
     CNN, optimizer = loadModel(model)
 
     # 3. predict
-    batch_size = 1024
     pred_classes = predict(CNN, x_loader)
     pred_classes = pred_classes.cpu().detach().numpy()
 
