@@ -44,79 +44,112 @@ class ResnetBlock():
         self.layers = layers
         self.in_channels = in_channels
         self.out_channels = out_channels
-        blocks = OrderedDict()
+        self.shortcut = None
+        self.blocks = []
         for _ in range(layers):
             if in_channels != out_channels and _ == 0:
-                blocks.update(self.get_conv_block(in_channels, out_channels, conv_layers[_], _))
+                self.blocks.append(nn.Sequential(self.get_conv_block(in_channels, out_channels, conv_layers[_], _)))
+                self.shortcut = nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1), stride=1, padding=0),
+                )
             else:
-                blocks.update(self.get_conv_block(out_channels, out_channels, conv_layers[_], _))
-        self.net = nn.Sequential(blocks)
-        self.shortcut = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1), stride=1, padding=0),
-            nn.BatchNorm2d(out_channels)
-        )
-        self.net.apply(self.init_weights)
-        self.shortcut.apply(self.init_weights)
-        self.device = device
-        self.net = self.net.to(device)
-        self.shortcut = self.shortcut.to(device)
+                self.blocks.append(nn.Sequential(self.get_conv_block(out_channels, out_channels, conv_layers[_], _)))
+        for item in self.blocks:
+            item.apply(self.init_weights)
+            item = item.to(device)
+        for item in self.shortcut:
+            item.apply(self.init_weights)
+            item = item.to(device)
+        self.net = [block for block in self.blocks] + [self.shortcut]
     def forward(self, x):
-        x_d = self.net(x)
-        x_s = self.shortcut(x)
-        x_f = x_d + x_s
-        return x_f
+        for inx, block in enumerate(self.blocks):
+            x_temp = block(x)
+            if inx == 0:
+                x = x_temp + self.shortcut(x)
+            else:
+                x = x + x_temp
+        return x
     def __call__(self, *args: torch.Any, **kwds: torch.Any) -> torch.Any:
-        return (*self.net.parameters(), *self.shortcut.parameters())
+        params = []
+        for block in self.blocks:
+            params.extend(block.parameters())
+        return (*params, *self.shortcut.parameters())
+
     def changeMode(self, mode):
         if mode == 'train':
-            self.net.train()
+            for block in self.blocks:
+                block.train()
             self.shortcut.train()
         elif mode == 'eval':
-            self.net.eval()
+            for block in self.blocks:
+                block.eval()
             self.shortcut.eval()
         
 
 class MyResnetCNN():
     def __init__(self, device='cuda'):
         self.device = device
-        self.net1 = ResnetBlock(1, 16, [2, 2, 2, 2, 2], layers=5, device = device)
+        self.net0 = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=(7, 7), stride=2, padding=3),
+            nn.BatchNorm2d(8),nn.ReLU(), nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False),
+        ).to(device)
+        self.net1 = ResnetBlock(8, 16, [2, 2, 2, 2, 2], layers=5, device = device)
         self.net2 = ResnetBlock(16, 32, [2, 2, 2, 2, 2, 2, 2], layers=7, device = device)
         self.net3 = ResnetBlock(32, 64, [2, 2, 2, 2, 2, 2, 2, 2, 2], layers=9, device = device)
+        self.net4 = ResnetBlock(64, 128, [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], layers=11, device = device)
         self.output = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, 10)
+            nn.Linear(128, 10)
         ).to(device)
-
+        self.init_weights(self.net0)
+        self.init_weights(self.net4)
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.xavier_uniform_(m.weight)
+            m.bias.data.fill_(0.01)
+        elif type(m) == nn.Conv2d:
+            torch.nn.init.xavier_uniform_(m.weight)
+            m.bias.data.fill_(0.01)
+        elif type(m) == nn.BatchNorm2d:
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
         
     def forward(self, x):
-        x1 = self.net1.forward(x)
+        self.changeMode('train')
+        x0 = self.net0.forward(x)
+        x1 = self.net1.forward(x0)
         x2 = self.net2.forward(x1)
         x3 = self.net3.forward(x2)
-        result = self.output(x3)
+        x4 = self.net4.forward(x3)
+        result = self.output(x4)
         return result
     def changeMode(self, mode):
         if mode == 'train':
+            self.net0.train()
             self.net1.changeMode('train')
             self.net2.changeMode('train')
             self.net3.changeMode('train')
+            self.net4.changeMode('train')
             self.output.train()
         elif mode == 'eval':
+            self.net0.eval()
             self.net1.changeMode('eval')
             self.net2.changeMode('eval')
             self.net3.changeMode('eval')
+            self.net4.changeMode('eval')
             self.output.eval()
     def __call__(self, *args: torch.Any, **kwds: torch.Any) -> torch.Any:
-        return (*self.net1(), *self.net2(), *self.net3(), *self.output.parameters())
+        return (*self.net0.parameters() ,*self.net1(), *self.net2(), *self.net3(), *self.net4(), *self.output.parameters())
     def predict(self, x):
         self.changeMode('eval')
         with torch.no_grad():
             return self.forward(x) 
-        self.changeMode('train')
         
-def dataLoader(list_videos, mfcc_path, batch_size, shrink) -> list:
+        
+def dataLoader(list_videos, mfcc_path, batch_size, shrink, testmode = False, ratio = 0.2) -> list:
     '''
     The return values are X, x_t, y, y_t
     X stands for train X
@@ -124,6 +157,7 @@ def dataLoader(list_videos, mfcc_path, batch_size, shrink) -> list:
     y stands for train y
     y_t stands for test y
     They are all list.
+    testmode is to output all data for training
     '''
     fread = open(list_videos, "r")
     label_list = []
@@ -143,17 +177,14 @@ def dataLoader(list_videos, mfcc_path, batch_size, shrink) -> list:
         raw_data.append(array)
     padding_data = pad_sequence(raw_data, batch_first=True)
 
-    Y = np.array(label_list)
+    Y = torch.from_numpy(np.array(label_list)).long()
     print(padding_data.shape, Y.shape)
 
-    X, x_t, y, y_t = train_test_split(padding_data, Y, test_size=0.2, random_state=18877)
-    if args.final:
-        X = padding_data
-        y = Y
+    X, x_t, y, y_t = train_test_split(padding_data, Y, test_size=ratio, random_state=18877)
+    if testmode:
+        X = torch.cat([X, x_t])
+        y = torch.cat([y, y_t])
     print(X.shape, y.shape, x_t.shape, y_t.shape)
-
-    y = torch.from_numpy(y).long()
-    y_t = torch.from_numpy(y_t).long()
 
     X = X.reshape(X.shape[0], 1, X.shape[1], X.shape[2])
     x_t = x_t.reshape(x_t.shape[0], 1, x_t.shape[1], x_t.shape[2])
@@ -176,11 +207,12 @@ def loadModel(load:bool, output_file, device):
     if load:
         with open(output_file, 'rb') as f:
             checkpoint = pickle.load(f)
-        net1 = checkpoint['net1']
-        net2 = checkpoint['net2']
-        return net1, net2
+            model = checkpoint['CNN']
+            optimizer = checkpoint['optimizer']
+            return model, optimizer
     else:
-        return MyResnetCNN(device=device)
+        model = MyResnetCNN(device=device)
+        return model, torch.optim.Adam(model(), lr=0.01, weight_decay=1e-4)
 
 if __name__ == '__main__':
 
@@ -192,23 +224,23 @@ if __name__ == '__main__':
     list_videos = '../labels/trainval.csv'
     feat_appendix = '.csv'
     mfcc_path = '../mfcc/'
-    output_file = '../models/mfcc-100.conv_2.model'
+    output_file = '../models/mfcc-100.resnet.model'
     device = 'cuda'
-    batch_size = 64
+    batch_size = 512
 
-    X, x_t, y, y_t = dataLoader(list_videos, mfcc_path, batch_size, shrink = 10000)
-    CNN = loadModel(args.cont, output_file, device)
+    X, x_t, y, y_t = dataLoader(list_videos, mfcc_path, batch_size, shrink = 10000, testmode = args.final, ratio = 0.2)
+    CNN, optimizer = loadModel(args.cont, output_file, device)
 
     loss = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(CNN(), lr=0.01, weight_decay=1e-4)
-    # print(CNN.net1.net, '\n', CNN.net2.net,'\n', CNN.net3.net,'\n', CNN.output)
+    print(CNN.net1.net, '\n', CNN.net2.net,'\n', CNN.net3.net,'\n',CNN.net4.net, '\n', CNN.output)
     
     epoches = []
     scores = []
     losses = []
     torch.autograd.set_detect_anomaly(True)
     for epoch in range(200):
-        for x_iter, y_iter in zip(X, y):
+        for inx, (x_iter, y_iter) in enumerate(zip(X, y)):
+            optimizer.zero_grad()
             x_iter = x_iter.cuda()
             y_iter = y_iter.cuda()
             y_hat = CNN.forward(x_iter)
@@ -217,6 +249,8 @@ if __name__ == '__main__':
             optimizer.step()
             x_iter = x_iter.cpu()
             y_iter = y_iter.cpu()
+            print(f'Train Epoch {epoch + 1} Batch {inx + 1} Finished', end='\r')
+        print(f'Train Epoch {epoch + 1} Finished             ', end='\r')
         if epoch % 10 == 9:
             epoches.append(epoch)
             scores.append(l.item())
@@ -234,9 +268,12 @@ if __name__ == '__main__':
             losses.append(accuracy)
             print(f'epoch:{epoch + 1} Training Loss: {l.item()} Val Accuracy: {accuracy}')
 
+    with open(output_file, 'wb') as f:
+        pickle.dump({'CNN': CNN, 'optimizer': optimizer}, f)
     # plot and add labels
     plt.plot(epoches, np.array(scores)/max(scores), label='loss')
     plt.plot(epoches, losses, label='accuracy')
+    plt.savefig(f'{output_file}.jpg')
     plt.xlabel('epoch')
     plt.ylabel('loss')
     index = 0
